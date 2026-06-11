@@ -76,22 +76,22 @@
         
         const STAND_HEIGHT = 9;
         const CROUCH_HEIGHT = 4.5;
-        const BASE_SPEED = 280.0;     // Viel schneller!
+        const BASE_SPEED = 280.0;     
         const SPRINT_MULTIPLIER = 1.6; 
         const CROUCH_MULTIPLIER = 0.5;
 
         const GRID_SIZE = 18;
-        const VIEW_RADIUS = 16;       // Größerer Radius, damit im Voraus geladen wird
-        const DESPAWN_RADIUS = 22;   
+        const VIEW_RADIUS = 10;       // Radius leicht verringert für maximale Performance
+        const DESPAWN_RADIUS = 14;   
         const generatedCells = new Map();
         const walls = [];
         const items = []; 
         
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x151508); 
+        scene.background = new THREE.Color(0x0a0a03); 
 
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 1, 500);
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" }); // Performance-Boost
         renderer.setSize(window.innerWidth, window.innerHeight);
         document.body.appendChild(renderer.domElement);
 
@@ -106,48 +106,27 @@
 
         scene.add(controls.getObject());
         
-        // FIX: Startet jetzt exakt sicher im Zentrum des ersten Raumes!
         controls.getObject().position.set(GRID_SIZE / 2, STAND_HEIGHT, GRID_SIZE / 2);
-        camera.position.set(0, 0, 0); // Kamera bleibt fest im Steuerungs-Objekt verankert
+        camera.position.set(0, 0, 0);
 
         // Geometrien
         const cellFloorGeo = new THREE.PlaneGeometry(GRID_SIZE, GRID_SIZE); cellFloorGeo.rotateX(-Math.PI / 2);
         const cellCeilingGeo = new THREE.PlaneGeometry(GRID_SIZE, GRID_SIZE); cellCeilingGeo.rotateX(Math.PI / 2);
         const boxGeo = new THREE.BoxGeometry(GRID_SIZE, 22, GRID_SIZE);
-        const lampGeo = new THREE.PlaneGeometry(7, 7); lampGeo.rotateX(Math.PI / 2);
+        const lampGeo = new THREE.PlaneGeometry(6, 6); lampGeo.rotateX(Math.PI / 2);
         const bottleGeo = new THREE.CylinderGeometry(0.2, 0.3, 1.4, 8);
 
-        // --- PROZEDURALE TEXTUREN ---
-        function createWallTexture() {
-            const canvas = document.createElement('canvas'); canvas.width = 512; canvas.height = 512;
-            const ctx = canvas.getContext('2d');
-            ctx.fillStyle = '#8c8f6f'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-            ctx.strokeStyle = '#6a7051'; ctx.lineWidth = 3;
-            const numLines = 8;
-            for (let i = 0; i < numLines; i++) {
-                const x = (canvas.width / numLines) * (i + 0.5);
-                ctx.beginPath(); ctx.setLineDash([12, 18]); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
-                ctx.setLineDash([]);
-                const numArrows = 10;
-                for (let j = 0; j < numArrows; j++) {
-                    const y = (canvas.height / numArrows) * j + 20;
-                    ctx.beginPath(); ctx.moveTo(x - 12, y + 8); ctx.lineTo(x, y - 6); ctx.lineTo(x + 12, y + 8); ctx.stroke();
-                }
-            }
-            return new THREE.CanvasTexture(canvas);
-        }
-
-        const wallMat = new THREE.MeshLambertMaterial({ map: createWallTexture() });
-        const floorMat = new THREE.MeshLambertMaterial({ map: (function(){ const c = document.createElement('canvas'); c.width = 256; c.height = 256; const ct = c.getContext('2d'); ct.fillStyle = '#9e9364'; ct.fillRect(0,0,256,256); ct.fillStyle = 'rgba(0,0,0,0.08)'; for(let i=0;i<3000;i++) ct.fillRect(Math.random()*256,Math.random()*256,2,2); return new THREE.CanvasTexture(c); })() });
-        const ceilingMat = new THREE.MeshLambertMaterial({ map: (function(){ const c = document.createElement('canvas'); c.width = 256; c.height = 256; const ct = c.getContext('2d'); ct.fillStyle = '#ccc49f'; ct.fillRect(0,0,256,256); ct.strokeStyle = 'rgba(0,0,0,0.1)'; ct.lineWidth = 2; ct.strokeRect(0,0,256,256); return new THREE.CanvasTexture(c); })() });
+        // Extrem leichtgewichtige Materialien ohne schwere Canvas-Generierung beim Start
+        const wallMat = new THREE.MeshLambertMaterial({ color: 0x8c8f6f });
+        const floorMat = new THREE.MeshLambertMaterial({ color: 0x9e9364 });
+        const ceilingMat = new THREE.MeshLambertMaterial({ color: 0xccc49f });
         const lampMat = new THREE.MeshBasicMaterial({ color: 0xfffca3 });
         const bottleMat = new THREE.MeshPhongMaterial({ color: 0x00ccff, transparent: true, opacity: 0.8, shininess: 80 });
 
-        // Umgebungslicht deutlich heller gestellt!
-        const ambientLight = new THREE.AmbientLight(0xfffae0, 0.75);
+        // Globale Helligkeit hochschrauben
+        const ambientLight = new THREE.AmbientLight(0xfffae0, 0.85);
         scene.add(ambientLight);
 
-        // --- UNENDLICHE MAP ENGINE ---
         function generateCell(gx, gz) {
             const key = `${gx},${gz}`;
             const cellData = { walls: [], lamps: [], floor: null, ceiling: null, item: null };
@@ -159,17 +138,14 @@
             const isSpawnZone = Math.abs(gx) <= 1 && Math.abs(gz) <= 1;
             
             if (!isSpawnZone && Math.random() < 0.18) { 
-                // Wand spawnen
                 const wMesh = new THREE.Mesh(boxGeo, wallMat); wMesh.position.set(posX + GRID_SIZE/2, 11, posZ + GRID_SIZE/2); scene.add(wMesh);
                 walls.push({ mesh: wMesh, box: new THREE.Box3().setFromObject(wMesh) }); cellData.walls.push(wMesh);
             } 
             else {
-                // Regelmäßige, helle Deckenlampen in jedem offenen Raum!
                 const lMesh = new THREE.Mesh(lampGeo, lampMat); lMesh.position.set(posX + GRID_SIZE/2, 21.9, posZ + GRID_SIZE/2); scene.add(lMesh);
-                const pLight = new THREE.PointLight(0xfffcd1, 1.4, 45, 1.2); pLight.position.set(posX + GRID_SIZE/2, 19, posZ + GRID_SIZE/2); scene.add(pLight);
+                const pLight = new THREE.PointLight(0xfffcd1, 1.2, 40, 1.2); pLight.position.set(posX + GRID_SIZE/2, 19, posZ + GRID_SIZE/2); scene.add(pLight);
                 cellData.lamps.push({ mesh: lMesh, light: pLight });
 
-                // Almond Water Item-Spawn-Chance (6%)
                 if (!isSpawnZone && Math.random() < 0.06) {
                     const bMesh = new THREE.Mesh(bottleGeo, bottleMat);
                     bMesh.position.set(posX + GRID_SIZE/2 + (Math.random()*4-2), 0.7, posZ + GRID_SIZE/2 + (Math.random()*4-2));
@@ -213,14 +189,14 @@
                     scene.remove(item.mesh);
                     items.splice(i, 1);
                     health = Math.min(100, health + 30);
-                    speedBoostTimer = 5.0; // 5 Sekunden Super-Speed!
+                    speedBoostTimer = 5.0; 
                     const cellKey = `${item.gx},${item.gz}`;
                     if(generatedCells.has(cellKey)) generatedCells.get(cellKey).item = null;
                 }
             }
         }
 
-        // --- STEUERUNG & BEWEGUNGSLOOP ---
+        // Steuerung
         let moveForward=false, moveBackward=false, moveLeft=false, moveRight=false, isSprinting=false, isCrouching=false;
         const velocity = new THREE.Vector3(), direction = new THREE.Vector3();
         
@@ -246,7 +222,6 @@
         });
 
         function checkCollision(targetPos) { 
-            // Verkleinerte Kollisionsbox für flüssigeres Laufen
             const pBox = new THREE.Box3(new THREE.Vector3(targetPos.x-1.0, 0, targetPos.z-1.0), new THREE.Vector3(targetPos.x+1.0, 22, targetPos.z+1.0)); 
             for(let i=0; i<walls.length; i++) if(pBox.intersectsBox(walls[i].box)) return true; 
             return false; 
@@ -265,7 +240,6 @@
                 const targetHeight = isCrouching ? CROUCH_HEIGHT : STAND_HEIGHT;
                 const controlObj = controls.getObject();
                 
-                // FIX: Sanfte Höhenanpassung direkt auf das Root-Objekt übertragen, um Runterfallen unmöglich zu machen!
                 controlObj.position.y += (targetHeight - controlObj.position.y) * 12 * delta;
 
                 let isMoving = moveForward || moveBackward || moveLeft || moveRight;
@@ -286,7 +260,7 @@
 
                 if(speedBoostTimer > 0) {
                     speedBoostTimer -= delta;
-                    currentSpeed *= 1.35; // Almond Water Boost!
+                    currentSpeed *= 1.35; 
                     document.getElementById('boost-indicator').style.display = 'block';
                 } else {
                     document.getElementById('boost-indicator').style.display = 'none';
