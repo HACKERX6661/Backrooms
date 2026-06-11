@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Backrooms - Roblox Style</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; user-select: none; }
+        
+        /* Startbildschirm */
+        #start-screen {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: #000;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+            text-align: center;
+            cursor: pointer;
+        }
+        #start-screen h1 { font-size: 48px; margin-bottom: 20px; letter-spacing: 2px; }
+        #start-screen .sub { font-size: 18px; color: #ccc; margin-bottom: 30px; }
+        #start-screen .controls-info { font-size: 16px; line-height: 1.6; max-width: 600px; color: #aaa; }
+        #start-screen b { color: #fff; }
+
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; padding: 20px; box-sizing: border-box; z-index: 10; display: none; }
+        #info-toggle-hint { position: absolute; top: 15px; right: 20px; background: rgba(0, 0, 0, 0.6); color: #ffcc00; padding: 8px 12px; border-radius: 5px; font-weight: bold; font-size: 15px; pointer-events: none; }
+        #crosshair { position: absolute; top: 50%; left: 50%; width: 6px; height: 6px; background-color: rgba(255,255,255,0.5); border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
+        
+        .status-container { width: 260px; background: rgba(0, 0, 0, 0.6); padding: 12px; border-radius: 8px; border: 2px solid #222; margin-top: auto; }
+        .bar-bg { width: 100%; height: 18px; background: #1a1a1a; border-radius: 2px; margin-bottom: 8px; overflow: hidden; position: relative; border: 1px solid #333; }
+        .bar-bg:last-child { margin-bottom: 0; }
+        .bar-fill { height: 100%; width: 100%; transition: width 0.1s ease; }
+        #health-fill { background: #8a1f1f; }
+        #stamina-fill { background: #1f4e8a; }
+        .bar-label { position: absolute; top: 0; left: 6px; color: #ccc; font-size: 10px; font-weight: bold; line-height: 18px; letter-spacing: 1px; }
+        
+        #boost-indicator { position: absolute; bottom: 80px; left: 20px; color: #00ffcc; font-weight: bold; font-size: 14px; display: none; text-shadow: 1px 1px 2px #000; }
+    </style>
+</head>
+<body>
+
+    <div id="start-screen">
+        <h1>THE BACKROOMS</h1>
+        <div class="sub">Klicke zum Starten</div>
+        <div class="controls-info">
+            <p><b>WASD</b> - Bewegen</p>
+            <p><b>Shift</b> - Sprinten (Schnell!)</p>
+            <p><b>C</b> - Ducken</p>
+            <p style="margin-top:20px; color: #00ffcc;">Sammle leuchtendes <b>Almond Water</b> für Leben & Extra-Speed!</p>
+        </div>
+    </div>
+
+    <div id="info-toggle-hint">Drücke [H] für Infos</div>
+
+    <div id="ui-layer">
+        <div id="boost-indicator">⚡ SUPER SPEED AKTIV!</div>
+        <div class="status-container">
+            <div class="bar-bg"><div id="health-fill" class="bar-fill"></div><div class="bar-label">HEALTH</div></div>
+            <div class="bar-bg"><div id="stamina-fill" class="bar-fill"></div><div class="bar-label">STAMINA</div></div>
+        </div>
+    </div>
+    
+    <div id="crosshair"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/PointerLockControls.js"></script>
+
+    <script>
+        let health = 100;
+        let stamina = 100;
+        let speedBoostTimer = 0;
+        
+        const STAND_HEIGHT = 9;
+        const CROUCH_HEIGHT = 4.5;
+        const BASE_SPEED = 280.0;     // Viel schneller!
+        const SPRINT_MULTIPLIER = 1.6; 
+        const CROUCH_MULTIPLIER = 0.5;
+
+        const GRID_SIZE = 18;
+        const VIEW_RADIUS = 16;       // Größerer Radius, damit im Voraus geladen wird
+        const DESPAWN_RADIUS = 22;   
+        const generatedCells = new Map();
+        const walls = [];
+        const items = []; 
+        
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x151508); 
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 1, 500);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new THREE.PointerLockControls(camera, document.body);
+
+        const startScreen = document.getElementById('start-screen');
+        const uiLayer = document.getElementById('ui-layer');
+        
+        startScreen.addEventListener('click', function () { controls.lock(); });
+        controls.addEventListener('lock', function () { startScreen.style.display = 'none'; uiLayer.style.display = 'flex'; });
+        controls.addEventListener('unlock', function () { startScreen.style.display = 'flex'; uiLayer.style.display = 'none'; });
+
+        scene.add(controls.getObject());
+        
+        // FIX: Startet jetzt exakt sicher im Zentrum des ersten Raumes!
+        controls.getObject().position.set(GRID_SIZE / 2, STAND_HEIGHT, GRID_SIZE / 2);
+        camera.position.set(0, 0, 0); // Kamera bleibt fest im Steuerungs-Objekt verankert
+
+        // Geometrien
+        const cellFloorGeo = new THREE.PlaneGeometry(GRID_SIZE, GRID_SIZE); cellFloorGeo.rotateX(-Math.PI / 2);
+        const cellCeilingGeo = new THREE.PlaneGeometry(GRID_SIZE, GRID_SIZE); cellCeilingGeo.rotateX(Math.PI / 2);
+        const boxGeo = new THREE.BoxGeometry(GRID_SIZE, 22, GRID_SIZE);
+        const lampGeo = new THREE.PlaneGeometry(7, 7); lampGeo.rotateX(Math.PI / 2);
+        const bottleGeo = new THREE.CylinderGeometry(0.2, 0.3, 1.4, 8);
+
+        // --- PROZEDURALE TEXTUREN ---
+        function createWallTexture() {
+            const canvas = document.createElement('canvas'); canvas.width = 512; canvas.height = 512;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#8c8f6f'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.strokeStyle = '#6a7051'; ctx.lineWidth = 3;
+            const numLines = 8;
+            for (let i = 0; i < numLines; i++) {
+                const x = (canvas.width / numLines) * (i + 0.5);
+                ctx.beginPath(); ctx.setLineDash([12, 18]); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+                ctx.setLineDash([]);
+                const numArrows = 10;
+                for (let j = 0; j < numArrows; j++) {
+                    const y = (canvas.height / numArrows) * j + 20;
+                    ctx.beginPath(); ctx.moveTo(x - 12, y + 8); ctx.lineTo(x, y - 6); ctx.lineTo(x + 12, y + 8); ctx.stroke();
+                }
+            }
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        const wallMat = new THREE.MeshLambertMaterial({ map: createWallTexture() });
+        const floorMat = new THREE.MeshLambertMaterial({ map: (function(){ const c = document.createElement('canvas'); c.width = 256; c.height = 256; const ct = c.getContext('2d'); ct.fillStyle = '#9e9364'; ct.fillRect(0,0,256,256); ct.fillStyle = 'rgba(0,0,0,0.08)'; for(let i=0;i<3000;i++) ct.fillRect(Math.random()*256,Math.random()*256,2,2); return new THREE.CanvasTexture(c); })() });
+        const ceilingMat = new THREE.MeshLambertMaterial({ map: (function(){ const c = document.createElement('canvas'); c.width = 256; c.height = 256; const ct = c.getContext('2d'); ct.fillStyle = '#ccc49f'; ct.fillRect(0,0,256,256); ct.strokeStyle = 'rgba(0,0,0,0.1)'; ct.lineWidth = 2; ct.strokeRect(0,0,256,256); return new THREE.CanvasTexture(c); })() });
+        const lampMat = new THREE.MeshBasicMaterial({ color: 0xfffca3 });
+        const bottleMat = new THREE.MeshPhongMaterial({ color: 0x00ccff, transparent: true, opacity: 0.8, shininess: 80 });
+
+        // Umgebungslicht deutlich heller gestellt!
+        const ambientLight = new THREE.AmbientLight(0xfffae0, 0.75);
+        scene.add(ambientLight);
+
+        // --- UNENDLICHE MAP ENGINE ---
+        function generateCell(gx, gz) {
+            const key = `${gx},${gz}`;
+            const cellData = { walls: [], lamps: [], floor: null, ceiling: null, item: null };
+            const posX = gx * GRID_SIZE, posZ = gz * GRID_SIZE;
+            
+            const fMesh = new THREE.Mesh(cellFloorGeo, floorMat); fMesh.position.set(posX + GRID_SIZE/2, 0, posZ + GRID_SIZE/2); scene.add(fMesh); cellData.floor = fMesh;
+            const cMesh = new THREE.Mesh(cellCeilingGeo, ceilingMat); cMesh.position.set(posX + GRID_SIZE/2, 22, posZ + GRID_SIZE/2); scene.add(cMesh); cellData.ceiling = cMesh;
+
+            const isSpawnZone = Math.abs(gx) <= 1 && Math.abs(gz) <= 1;
+            
+            if (!isSpawnZone && Math.random() < 0.18) { 
+                // Wand spawnen
+                const wMesh = new THREE.Mesh(boxGeo, wallMat); wMesh.position.set(posX + GRID_SIZE/2, 11, posZ + GRID_SIZE/2); scene.add(wMesh);
+                walls.push({ mesh: wMesh, box: new THREE.Box3().setFromObject(wMesh) }); cellData.walls.push(wMesh);
+            } 
+            else {
+                // Regelmäßige, helle Deckenlampen in jedem offenen Raum!
+                const lMesh = new THREE.Mesh(lampGeo, lampMat); lMesh.position.set(posX + GRID_SIZE/2, 21.9, posZ + GRID_SIZE/2); scene.add(lMesh);
+                const pLight = new THREE.PointLight(0xfffcd1, 1.4, 45, 1.2); pLight.position.set(posX + GRID_SIZE/2, 19, posZ + GRID_SIZE/2); scene.add(pLight);
+                cellData.lamps.push({ mesh: lMesh, light: pLight });
+
+                // Almond Water Item-Spawn-Chance (6%)
+                if (!isSpawnZone && Math.random() < 0.06) {
+                    const bMesh = new THREE.Mesh(bottleGeo, bottleMat);
+                    bMesh.position.set(posX + GRID_SIZE/2 + (Math.random()*4-2), 0.7, posZ + GRID_SIZE/2 + (Math.random()*4-2));
+                    scene.add(bMesh);
+                    const itemObj = { mesh: bMesh, gx: gx, gz: gz };
+                    items.push(itemObj);
+                    cellData.item = itemObj;
+                }
+            }
+            generatedCells.set(key, cellData);
+        }
+
+        function updateInfiniteMap() {
+            const playerX = Math.floor(controls.getObject().position.x / GRID_SIZE);
+            const playerZ = Math.floor(controls.getObject().position.z / GRID_SIZE);
+
+            for (let x = playerX - VIEW_RADIUS; x <= playerX + VIEW_RADIUS; x++) { 
+                for (let z = playerZ - VIEW_RADIUS; z <= playerZ + VIEW_RADIUS; z++) { 
+                    if (!generatedCells.has(`${x},${z}`)) generateCell(x, z); 
+                } 
+            }
+
+            for (const [key, value] of generatedCells.entries()) {
+                const [cx, cz] = key.split(',').map(Number);
+                if (Math.abs(cx - playerX) > DESPAWN_RADIUS || Math.abs(cz - playerZ) > DESPAWN_RADIUS) {
+                    value.walls.forEach(wMesh => { scene.remove(wMesh); const idx = walls.findIndex(w => w.mesh === wMesh); if(idx > -1) walls.splice(idx, 1); });
+                    value.lamps.forEach(l => { scene.remove(l.mesh); scene.remove(l.light); });
+                    if(value.floor) scene.remove(value.floor); 
+                    if(value.ceiling) scene.remove(value.ceiling);
+                    if(value.item) { scene.remove(value.item.mesh); const idx = items.indexOf(value.item); if(idx > -1) items.splice(idx,1); }
+                    generatedCells.delete(key);
+                }
+            }
+        }
+
+        function checkItemCollisions() {
+            const pPos = controls.getObject().position;
+            for (let i = items.length - 1; i >= 0; i--) {
+                const item = items[i];
+                if(pPos.distanceTo(item.mesh.position) < 2.5) { 
+                    scene.remove(item.mesh);
+                    items.splice(i, 1);
+                    health = Math.min(100, health + 30);
+                    speedBoostTimer = 5.0; // 5 Sekunden Super-Speed!
+                    const cellKey = `${item.gx},${item.gz}`;
+                    if(generatedCells.has(cellKey)) generatedCells.get(cellKey).item = null;
+                }
+            }
+        }
+
+        // --- STEUERUNG & BEWEGUNGSLOOP ---
+        let moveForward=false, moveBackward=false, moveLeft=false, moveRight=false, isSprinting=false, isCrouching=false;
+        const velocity = new THREE.Vector3(), direction = new THREE.Vector3();
+        
+        document.addEventListener('keydown', function(e) { 
+            switch (e.code) { 
+                case 'KeyW': moveForward = true; break; 
+                case 'KeyA': moveLeft = true; break; 
+                case 'KeyS': moveBackward = true; break; 
+                case 'KeyD': moveRight = true; break; 
+                case 'ShiftLeft': isSprinting = true; break; 
+                case 'KeyC': isCrouching = true; break; 
+            } 
+        });
+        document.addEventListener('keyup', function(e) { 
+            switch (e.code) { 
+                case 'KeyW': moveForward = false; break; 
+                case 'KeyA': moveLeft = false; break; 
+                case 'KeyS': moveBackward = false; break; 
+                case 'KeyD': moveRight = false; break; 
+                case 'ShiftLeft': isSprinting = false; break; 
+                case 'KeyC': isCrouching = false; break; 
+            } 
+        });
+
+        function checkCollision(targetPos) { 
+            // Verkleinerte Kollisionsbox für flüssigeres Laufen
+            const pBox = new THREE.Box3(new THREE.Vector3(targetPos.x-1.0, 0, targetPos.z-1.0), new THREE.Vector3(targetPos.x+1.0, 22, targetPos.z+1.0)); 
+            for(let i=0; i<walls.length; i++) if(pBox.intersectsBox(walls[i].box)) return true; 
+            return false; 
+        }
+
+        let prevTime = performance.now();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const time = performance.now(), delta = (time - prevTime) / 1000;
+
+            if (controls.isLocked === true) {
+                updateInfiniteMap();
+                checkItemCollisions();
+
+                const targetHeight = isCrouching ? CROUCH_HEIGHT : STAND_HEIGHT;
+                const controlObj = controls.getObject();
+                
+                // FIX: Sanfte Höhenanpassung direkt auf das Root-Objekt übertragen, um Runterfallen unmöglich zu machen!
+                controlObj.position.y += (targetHeight - controlObj.position.y) * 12 * delta;
+
+                let isMoving = moveForward || moveBackward || moveLeft || moveRight;
+                if (isSprinting && isMoving && !isCrouching && stamina > 0) { 
+                    stamina -= 24 * delta; 
+                    if (stamina < 0) stamina = 0; 
+                } else { 
+                    stamina += 14 * delta; 
+                    if (stamina > 100) stamina = 100; 
+                }
+
+                let currentSpeed = BASE_SPEED;
+                if (isCrouching) { 
+                    currentSpeed *= CROUCH_MULTIPLIER; 
+                } else if (isSprinting && stamina > 0) { 
+                    currentSpeed *= SPRINT_MULTIPLIER; 
+                }
+
+                if(speedBoostTimer > 0) {
+                    speedBoostTimer -= delta;
+                    currentSpeed *= 1.35; // Almond Water Boost!
+                    document.getElementById('boost-indicator').style.display = 'block';
+                } else {
+                    document.getElementById('boost-indicator').style.display = 'none';
+                }
+
+                velocity.x -= velocity.x * 10.0 * delta; 
+                velocity.z -= velocity.z * 10.0 * delta;
+
+                direction.z = Number(moveForward) - Number(moveBackward); 
+                direction.x = Number(moveRight) - Number(moveLeft); 
+                direction.normalize();
+
+                if (moveForward || moveBackward) velocity.z -= direction.z * currentSpeed * delta;
+                if (moveLeft || moveRight) velocity.x += direction.x * currentSpeed * delta; 
+
+                const oldPos = controlObj.position.clone();
+                
+                controlObj.translateX(velocity.x * delta); 
+                if (checkCollision(controlObj.position)) { controlObj.position.x = oldPos.x; velocity.x = 0; }
+                
+                controlObj.translateZ(velocity.z * delta); 
+                if (checkCollision(controlObj.position)) { controlObj.position.z = oldPos.z; velocity.z = 0; }
+
+                document.getElementById('health-fill').style.width = health + '%'; 
+                document.getElementById('stamina-fill').style.width = stamina + '%';
+            }
+            prevTime = time; 
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', function () { 
+            camera.aspect = window.innerWidth / window.innerHeight; 
+            camera.updateProjectionMatrix(); 
+            renderer.setSize(window.innerWidth, window.innerHeight); 
+        });
+
+        updateInfiniteMap(); 
+        animate();
+    </script>
+</body>
+</html>
